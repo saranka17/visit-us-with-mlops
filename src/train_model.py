@@ -304,28 +304,28 @@ def main() -> None:
         )
 
         model_card = f"""---
-license: mit
-library_name: scikit-learn
-tags:
-- mlflow
-- scikit-learn
-- random-forest
-- binary-classification
----
+            license: mit
+            library_name: scikit-learn
+            tags:
+            - mlflow
+            - scikit-learn
+            - random-forest
+            - binary-classification
+            ---
 
-# Visit With Us Random Forest Model
+            # Visit With Us Random Forest Model
 
-## Dataset
-- Dataset repo: `{dataset_repo_id}`
-- Train file: `processed/train.csv`
-- Test file: `processed/test.csv`
+            ## Dataset
+            - Dataset repo: `{dataset_repo_id}`
+            - Train file: `processed/train.csv`
+            - Test file: `processed/test.csv`
 
-## Best Parameters
-{json.dumps(best_params, indent=2)}
+            ## Best Parameters
+            {json.dumps(best_params, indent=2)}
 
-## Test Metrics
-{json.dumps(metrics, indent=2)}
-"""
+            ## Test Metrics
+            {json.dumps(metrics, indent=2)}
+        """
         (artifacts_dir / "README.md").write_text(model_card)
 
         mlflow.log_artifact(str(artifacts_dir / "cv_results.csv"))
