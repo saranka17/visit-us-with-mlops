@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+joblib
+mlflow
+huggingface_hub
+python-dotenv
+streamlit
+pyyaml
+xgboost
