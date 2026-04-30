@@ -106,7 +106,6 @@ def load_optional_json(
         except Exception:
             pass
 
-    # Metadata files are helpful but not required for model training itself.
     return {}
 
 
