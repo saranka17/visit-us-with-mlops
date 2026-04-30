@@ -21,6 +21,13 @@ PROCESSED_FILENAMES = {
 }
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -116,30 +123,36 @@ def resolve_raw_data_path(
     dataset_repo_id: str | None,
     hf_token: str | None,
 ) -> Path:
+    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
     local_file = data_dir / RAW_FILENAME
 
-    if dataset_repo_id:
-        try:
-            downloaded_file = hf_hub_download(
-                repo_id=dataset_repo_id,
-                filename=RAW_FILENAME,
-                repo_type="dataset",
-                token=hf_token,
-            )
-            print(f"Downloaded raw dataset from Hugging Face: {downloaded_file}")
-            return Path(downloaded_file)
-        except Exception as exc:
+    if not dataset_repo_id:
+        if allow_local_fallback and local_file.exists():
+            print(f"Using local raw dataset: {local_file}")
+            return local_file
+        raise ValueError(
+            "DATASET_REPO_ID or HF_USERNAME must be set to load the dataset from Hugging Face."
+        )
+
+    try:
+        downloaded_file = hf_hub_download(
+            repo_id=dataset_repo_id,
+            filename=RAW_FILENAME,
+            repo_type="dataset",
+            token=hf_token,
+        )
+        print(f"Downloaded raw dataset from Hugging Face: {downloaded_file}")
+        return Path(downloaded_file)
+    except Exception as exc:
+        if allow_local_fallback and local_file.exists():
             print(
                 "Unable to download the raw dataset from Hugging Face. "
-                f"Falling back to the local file: {exc}"
+                f"Using the local file because ALLOW_LOCAL_FALLBACK is enabled: {exc}"
             )
-
-    # Local fallback keeps the notebook runnable even when network access or credentials are unavailable.
-    if not local_file.exists():
-        raise FileNotFoundError(f"Raw data not found locally: {local_file}")
-
-    print(f"Using local raw dataset: {local_file}")
-    return local_file
+            return local_file
+        raise RuntimeError(
+            "Unable to download the raw dataset from Hugging Face Dataset Hub."
+        ) from exc
 
 
 def main():
@@ -193,35 +206,40 @@ def main():
     print(f"Saved feature schema to: {feature_schema_path}")
     print(f"Saved data metadata to: {metadata_path}")
 
-    if dataset_repo_id and hf_token:
-        api = HfApi(token=hf_token)
-        try:
-            # Upload both the data splits and the metadata used by the deployment layer so the entire workflow stays reproducible.
-            uploads = {
-                cleaned_path: PROCESSED_FILENAMES["cleaned"],
-                train_path: PROCESSED_FILENAMES["train"],
-                test_path: PROCESSED_FILENAMES["test"],
-                feature_schema_path: PROCESSED_FILENAMES["schema"],
-                metadata_path: PROCESSED_FILENAMES["metadata"],
-            }
-            for local_path, repo_path in uploads.items():
-                api.upload_file(
-                    path_or_fileobj=str(local_path),
-                    path_in_repo=repo_path,
-                    repo_id=dataset_repo_id,
-                    repo_type="dataset",
-                )
-            print(
-                "Uploaded cleaned data, train/test splits, and metadata to: "
-                f"{dataset_repo_id}"
+    if not dataset_repo_id:
+        raise ValueError(
+            "DATASET_REPO_ID or HF_USERNAME must be set to upload processed datasets to Hugging Face."
+        )
+    if not hf_token:
+        raise ValueError(
+            "HF_TOKEN must be set to upload processed datasets to Hugging Face."
+        )
+
+    api = HfApi(token=hf_token)
+    try:
+        # Upload both the data splits and the metadata used by the deployment layer so the entire workflow stays reproducible.
+        uploads = {
+            cleaned_path: PROCESSED_FILENAMES["cleaned"],
+            train_path: PROCESSED_FILENAMES["train"],
+            test_path: PROCESSED_FILENAMES["test"],
+            feature_schema_path: PROCESSED_FILENAMES["schema"],
+            metadata_path: PROCESSED_FILENAMES["metadata"],
+        }
+        for local_path, repo_path in uploads.items():
+            api.upload_file(
+                path_or_fileobj=str(local_path),
+                path_in_repo=repo_path,
+                repo_id=dataset_repo_id,
+                repo_type="dataset",
             )
-        except Exception as exc:
-            print(
-                "Unable to upload processed datasets to Hugging Face. "
-                f"Keeping the local files only: {exc}"
-            )
-    else:
-        print("HF_TOKEN or DATASET_REPO_ID not found. Skipping Hugging Face upload.")
+        print(
+            "Uploaded cleaned data, train/test splits, and metadata to: "
+            f"{dataset_repo_id}"
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to upload processed datasets to Hugging Face Dataset Hub."
+        ) from exc
 
 
 

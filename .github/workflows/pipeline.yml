@@ -11,10 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PYTHON_VERSION: "3.11"
+  ALLOW_LOCAL_FALLBACK: "false"
 
 jobs:
   register-dataset:
@@ -43,6 +44,25 @@ jobs:
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
         run: python src/register_data.py
 
+      - name: Capture repository diff
+        if: always()
+        run: |
+          git add -A
+          git restore --staged artifacts mlruns data/processed || true
+          git diff --binary --cached > register-dataset.patch
+          git reset
+          if [ ! -s register-dataset.patch ]; then
+            rm -f register-dataset.patch
+          fi
+
+      - name: Upload repository diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-diff-register-dataset
+          path: register-dataset.patch
+          if-no-files-found: ignore
+
   data-preparation:
     name: Prepare Cleaned Dataset
     runs-on: ubuntu-latest
@@ -69,6 +89,25 @@ jobs:
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
         run: python src/prepare_data.py
+
+      - name: Capture repository diff
+        if: always()
+        run: |
+          git add -A
+          git restore --staged artifacts mlruns data/processed || true
+          git diff --binary --cached > data-preparation.patch
+          git reset
+          if [ ! -s data-preparation.patch ]; then
+            rm -f data-preparation.patch
+          fi
+
+      - name: Upload repository diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-diff-data-preparation
+          path: data-preparation.patch
+          if-no-files-found: ignore
 
   model-training:
     name: Train And Register Model
@@ -108,6 +147,25 @@ jobs:
             mlruns
           if-no-files-found: warn
 
+      - name: Capture repository diff
+        if: always()
+        run: |
+          git add -A
+          git restore --staged artifacts mlruns data/processed || true
+          git diff --binary --cached > model-training.patch
+          git reset
+          if [ ! -s model-training.patch ]; then
+            rm -f model-training.patch
+          fi
+
+      - name: Upload repository diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-diff-model-training
+          path: model-training.patch
+          if-no-files-found: ignore
+
   deploy-space:
     name: Deploy To Hugging Face Space
     runs-on: ubuntu-latest
@@ -141,3 +199,97 @@ jobs:
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           SPACE_REPO_ID: ${{ vars.SPACE_REPO_ID }}
         run: python src/deploy_space.py
+
+      - name: Capture repository diff
+        if: always()
+        run: |
+          git add -A
+          git restore --staged artifacts mlruns data/processed || true
+          git diff --binary --cached > deploy-space.patch
+          git reset
+          if [ ! -s deploy-space.patch ]; then
+            rm -f deploy-space.patch
+          fi
+
+      - name: Upload repository diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-diff-deploy-space
+          path: deploy-space.patch
+          if-no-files-found: ignore
+
+  push-code-updates:
+    name: Push Code Updates To Main
+    runs-on: ubuntu-latest
+    needs: deploy-space
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Download repository diff artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: repo-diff-*
+          merge-multiple: true
+          path: repo-diffs
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Configure push authentication
+        env:
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.WORKFLOW_PUSH_TOKEN }}
+        run: |
+          if [ -n "$WORKFLOW_PUSH_TOKEN" ]; then
+            git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            echo "Using WORKFLOW_PUSH_TOKEN for main branch updates."
+          else
+            echo "WORKFLOW_PUSH_TOKEN is not set. Falling back to the default GitHub Actions token."
+          fi
+
+      - name: Apply workflow diffs
+        id: apply_diffs
+        run: |
+          shopt -s nullglob
+          patches=(repo-diffs/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No repository diff artifacts found."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            git apply --whitespace=nowarn "$patch"
+          done
+          git add -A
+          git restore --staged artifacts mlruns data/processed || true
+          if git diff --cached --quiet; then
+            echo "No tracked code changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit workflow-managed updates
+        id: commit_updates
+        if: steps.apply_diffs.outputs.changed == 'true'
+        run: |
+          git commit -m "chore: sync workflow-managed code updates [skip ci]"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sync with latest main
+        if: steps.commit_updates.outputs.changed == 'true'
+        run: |
+          git fetch origin main
+          git pull --rebase origin main
+
+      - name: Push updates to main
+        if: steps.commit_updates.outputs.changed == 'true'
+        run: |
+          git push origin HEAD:main

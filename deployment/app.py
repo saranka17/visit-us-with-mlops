@@ -19,6 +19,13 @@ ARTIFACT_FILENAMES = [
 ]
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -26,6 +33,7 @@ def load_json(path: Path) -> dict:
 
 
 def resolve_artifact(filename: str, model_repo_id: str, hf_token: str | None) -> Path:
+    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
     local_path = (
         Path(__file__).resolve().parents[1]
         / "artifacts"
@@ -41,11 +49,13 @@ def resolve_artifact(filename: str, model_repo_id: str, hf_token: str | None) ->
             token=hf_token,
         )
         return Path(downloaded)
-    except Exception:
-        # Fallback to local artifacts so the app can still run during local development even when Hub access is unavailable.
-        if local_path.exists():
+    except Exception as exc:
+        if allow_local_fallback and local_path.exists():
+            # Keep an opt-in local mode for development, but require Hub-based loading by default to match deployment expectations.
             return local_path
-        raise FileNotFoundError(f"Unable to load artifact: {filename}")
+        raise FileNotFoundError(
+            f"Unable to load artifact from Hugging Face Model Hub: {filename}"
+        ) from exc
 
 
 @st.cache_resource

@@ -32,6 +32,13 @@ FEATURE_SCHEMA_FILENAME = "processed/feature_schema.json"
 DATA_METADATA_FILENAME = "processed/data_metadata.json"
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolve_n_jobs() -> int:
     # Default to a single process locally because some restricted environments block process-based parallelism. CI can override this to `-1`.
     raw_value = os.getenv("SKLEARN_N_JOBS", "1").strip()
@@ -48,29 +55,37 @@ def resolve_processed_file(
     hf_token: str | None,
     filename: str,
 ) -> Path:
+    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
     local_file = project_root / "data" / filename
 
-    if dataset_repo_id:
-        try:
-            downloaded_file = hf_hub_download(
-                repo_id=dataset_repo_id,
-                filename=filename,
-                repo_type="dataset",
-                token=hf_token,
-            )
-            print(f"Downloaded {filename} from Hugging Face: {downloaded_file}")
-            return Path(downloaded_file)
-        except Exception as exc:
+    if not dataset_repo_id:
+        if allow_local_fallback and local_file.exists():
+            print(f"Using local processed file: {local_file}")
+            return local_file
+        raise ValueError(
+            "DATASET_REPO_ID or HF_USERNAME must be set to load processed data from Hugging Face."
+        )
+
+    try:
+        downloaded_file = hf_hub_download(
+            repo_id=dataset_repo_id,
+            filename=filename,
+            repo_type="dataset",
+            token=hf_token,
+        )
+        print(f"Downloaded {filename} from Hugging Face: {downloaded_file}")
+        return Path(downloaded_file)
+    except Exception as exc:
+        if allow_local_fallback and local_file.exists():
             print(
                 f"Unable to download {filename} from Hugging Face. "
-                f"Falling back to local file: {exc}"
+                "Using the local file because ALLOW_LOCAL_FALLBACK is enabled: "
+                f"{exc}"
             )
-
-    if not local_file.exists():
-        raise FileNotFoundError(f"Processed data not found locally: {local_file}")
-
-    print(f"Using local processed file: {local_file}")
-    return local_file
+            return local_file
+        raise RuntimeError(
+            f"Unable to download {filename} from Hugging Face Dataset Hub."
+        ) from exc
 
 
 def load_data(project_root: Path, dataset_repo_id: str | None, hf_token: str | None):
@@ -88,9 +103,10 @@ def load_optional_json(
     hf_token: str | None,
     filename: str,
 ) -> dict:
+    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
     local_file = project_root / "data" / filename
 
-    if dataset_repo_id:
+    if dataset_repo_id and hf_token:
         try:
             downloaded_file = hf_hub_download(
                 repo_id=dataset_repo_id,
@@ -102,7 +118,7 @@ def load_optional_json(
         except Exception:
             pass
 
-    if local_file.exists():
+    if allow_local_fallback and local_file.exists():
         return json.loads(local_file.read_text())
 
     # Metadata files are helpful but not required for model training itself.
@@ -158,8 +174,7 @@ def evaluate_model(model: Pipeline, X_test: pd.DataFrame, y_test: pd.Series):
 
 def upload_model_to_hf(artifacts_dir: Path, model_repo_id: str, hf_token: str | None) -> None:
     if not hf_token:
-        print("HF_TOKEN not found. Skipping model upload.")
-        return
+        raise ValueError("HF_TOKEN must be set to upload the best model to Hugging Face.")
 
     try:
         api = HfApi(token=hf_token)
@@ -180,10 +195,9 @@ def upload_model_to_hf(artifacts_dir: Path, model_repo_id: str, hf_token: str | 
 
         print(f"Best model uploaded to Hugging Face Model Hub: {model_repo_id}")
     except Exception as exc:
-        print(
-            "Unable to upload the best model to Hugging Face. "
-            f"Local artifacts remain available at: {artifacts_dir}. Error: {exc}"
-        )
+        raise RuntimeError(
+            "Unable to upload the best model to Hugging Face Model Hub."
+        ) from exc
 
 
 def main() -> None:
@@ -199,8 +213,10 @@ def main() -> None:
         f"{hf_username}/visit-with-us-random-forest" if hf_username else "visit-with-us-random-forest"
     )
 
-    if not dataset_repo_id and not (project_root / "data" / TRAIN_FILENAME).exists():
-        raise ValueError("DATASET_REPO_ID is missing and no local processed train/test files were found.")
+    if not dataset_repo_id and not env_flag("ALLOW_LOCAL_FALLBACK", default=False):
+        raise ValueError(
+            "DATASET_REPO_ID or HF_USERNAME must be set to load train and test data from Hugging Face."
+        )
 
     mlflow.set_tracking_uri(f"file://{(project_root / 'mlruns').resolve()}")
     mlflow.set_experiment("visit-with-us-model-training")

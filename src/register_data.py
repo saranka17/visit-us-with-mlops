@@ -8,6 +8,13 @@ from huggingface_hub import HfApi, create_repo
 from huggingface_hub.utils import RepositoryNotFoundError
 
 
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if value:
+        return value
+    raise ValueError(f"{name} must be set to register data on Hugging Face.")
+
+
 def main():
     # Resolve all project-relative paths from the script location so the code
     project_root = Path(__file__).resolve().parents[1]
@@ -19,15 +26,15 @@ def main():
         f"{hf_username}/visit-with-us-tourism" if hf_username else None
     )
     repo_type = "dataset"
-    hf_token = os.getenv("HF_TOKEN")
+    hf_token = require_env("HF_TOKEN")
 
     if not data_path.exists():
         raise FileNotFoundError(f"Raw data not found: {data_path}")
 
-    if not dataset_repo_id or not hf_token:
-        print("HF_TOKEN or DATASET_REPO_ID not found. Skipping Hugging Face upload.")
-        print(f"Local raw data available at: {data_path}")
-        return
+    if not dataset_repo_id:
+        raise ValueError(
+            "DATASET_REPO_ID or HF_USERNAME must be set to register data on Hugging Face."
+        )
 
     # Use the Hub API directly instead of a git-based push so the same logic
     api = HfApi(token=hf_token)
@@ -56,10 +63,9 @@ def main():
         )
         print(f"Raw dataset uploaded to Hugging Face Dataset Hub: {dataset_repo_id}")
     except Exception as exc:
-        print(
-            "Unable to upload the raw dataset to Hugging Face. "
-            f"Local raw data remains available at: {data_path}. Error: {exc}"
-        )
+        raise RuntimeError(
+            "Unable to upload the raw dataset to Hugging Face Dataset Hub."
+        ) from exc
 
 
 if __name__ == "__main__":
