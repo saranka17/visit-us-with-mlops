@@ -10,17 +10,28 @@ from huggingface_hub import hf_hub_download
 
 
 DEFAULT_MODEL_REPO_ID = "saranka85/visit-with-us-tourism-random-forest"
+ARTIFACT_FILENAMES = [
+    "model.joblib",
+    "metrics.json",
+    "best_params.json",
+    "feature_schema.json",
+    "model_metadata.json",
+]
 
 
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
-    with open(path) as f:
-        return json.load(f)
+    return json.loads(path.read_text())
 
 
 def resolve_artifact(filename: str, model_repo_id: str, hf_token: str | None) -> Path:
-    local_path = Path(__file__).resolve().parents[1] / "artifacts" / "random_forest_model" / filename
+    local_path = (
+        Path(__file__).resolve().parents[1]
+        / "artifacts"
+        / "random_forest_model"
+        / filename
+    )
 
     try:
         downloaded = hf_hub_download(
@@ -31,6 +42,7 @@ def resolve_artifact(filename: str, model_repo_id: str, hf_token: str | None) ->
         )
         return Path(downloaded)
     except Exception:
+        # Fallback to local artifacts so the app can still run during local development even when Hub access is unavailable.
         if local_path.exists():
             return local_path
         raise FileNotFoundError(f"Unable to load artifact: {filename}")
@@ -42,61 +54,64 @@ def load_model_bundle():
     model_repo_id = os.getenv("MODEL_REPO_ID", DEFAULT_MODEL_REPO_ID)
     hf_token = os.getenv("HF_TOKEN")
 
-    model_path = resolve_artifact("model.joblib", model_repo_id, hf_token)
-    metrics_path = resolve_artifact("metrics.json", model_repo_id, hf_token)
-    params_path = resolve_artifact("best_params.json", model_repo_id, hf_token)
+    # Download all deployment artifacts together so the app uses one coherent model package rather than mixing old local files with new remote ones.
+    artifact_paths = {
+        filename: resolve_artifact(filename, model_repo_id, hf_token)
+        for filename in ARTIFACT_FILENAMES
+    }
 
-    model = joblib.load(model_path)
-    metrics = load_json(metrics_path)
-    params = load_json(params_path)
+    model = joblib.load(artifact_paths["model.joblib"])
+    metrics = load_json(artifact_paths["metrics.json"])
+    params = load_json(artifact_paths["best_params.json"])
+    feature_schema = load_json(artifact_paths["feature_schema.json"])
+    model_metadata = load_json(artifact_paths["model_metadata.json"])
 
-    return model, metrics, params, model_repo_id
+    return model, metrics, params, feature_schema, model_metadata, model_repo_id
 
 
-def build_input_dataframe() -> pd.DataFrame:
+def render_numeric_input(column: str, spec: dict):
+    minimum = spec.get("min", 0)
+    maximum = spec.get("max", minimum + 1)
+    default = spec.get("default", minimum)
+
+    # Integer-like fields should stay as integers in the UI because they represent counts, binary flags, or category codes.
+    if spec.get("type") == "integer":
+        return st.number_input(
+            column,
+            min_value=int(minimum),
+            max_value=int(maximum),
+            value=int(default),
+            step=1,
+        )
+
+    return st.number_input(
+        column,
+        min_value=float(minimum),
+        max_value=float(maximum),
+        value=float(default),
+    )
+
+
+def build_input_dataframe(feature_schema: dict, feature_order: list[str]) -> tuple[bool, pd.DataFrame]:
+    inputs: dict[str, object] = {}
+
     with st.form("prediction_form"):
-        age = st.number_input("Age", min_value=18, max_value=80, value=35)
-        typeof_contact = st.selectbox("TypeofContact", ["Company Invited", "Self Enquiry"])
-        city_tier = st.selectbox("CityTier", [1, 2, 3])
-        duration_of_pitch = st.number_input("DurationOfPitch", min_value=1, max_value=150, value=15)
-        occupation = st.selectbox("Occupation", ["Salaried", "Small Business", "Large Business", "Free Lancer"])
-        gender = st.selectbox("Gender", ["Female", "Male"])
-        number_of_person_visiting = st.selectbox("NumberOfPersonVisiting", [1, 2, 3, 4, 5])
-        number_of_followups = st.selectbox("NumberOfFollowups", [1, 2, 3, 4, 5, 6])
-        product_pitched = st.selectbox("ProductPitched", ["Basic", "Deluxe", "Standard", "Super Deluxe", "King"])
-        preferred_property_star = st.selectbox("PreferredPropertyStar", [3, 4, 5])
-        marital_status = st.selectbox("MaritalStatus", ["Single", "Married", "Divorced"])
-        number_of_trips = st.number_input("NumberOfTrips", min_value=1, max_value=25, value=3)
-        passport = st.selectbox("Passport", [0, 1])
-        pitch_satisfaction_score = st.selectbox("PitchSatisfactionScore", [1, 2, 3, 4, 5])
-        own_car = st.selectbox("OwnCar", [0, 1])
-        number_of_children_visiting = st.selectbox("NumberOfChildrenVisiting", [0, 1, 2, 3])
-        designation = st.selectbox("Designation", ["Executive", "Manager", "Senior Manager", "AVP", "VP"])
-        monthly_income = st.number_input("MonthlyIncome", min_value=1000, max_value=100000, value=22000)
+        for column in feature_order:
+            spec = feature_schema.get(column, {})
+            field_type = spec.get("type")
+
+            if field_type == "categorical":
+                # The UI is generated from saved training metadata so it stays aligned with the model even if the feature list changes later.
+                options = spec.get("categories", [])
+                default_value = spec.get("default")
+                default_index = options.index(default_value) if default_value in options else 0
+                inputs[column] = st.selectbox(column, options, index=default_index)
+            else:
+                inputs[column] = render_numeric_input(column, spec)
 
         submitted = st.form_submit_button("Predict")
 
-    input_df = pd.DataFrame([{
-        "Age": age,
-        "TypeofContact": typeof_contact,
-        "CityTier": city_tier,
-        "DurationOfPitch": duration_of_pitch,
-        "Occupation": occupation,
-        "Gender": gender,
-        "NumberOfPersonVisiting": number_of_person_visiting,
-        "NumberOfFollowups": number_of_followups,
-        "ProductPitched": product_pitched,
-        "PreferredPropertyStar": preferred_property_star,
-        "MaritalStatus": marital_status,
-        "NumberOfTrips": number_of_trips,
-        "Passport": passport,
-        "PitchSatisfactionScore": pitch_satisfaction_score,
-        "OwnCar": own_car,
-        "NumberOfChildrenVisiting": number_of_children_visiting,
-        "Designation": designation,
-        "MonthlyIncome": monthly_income,
-    }])
-
+    input_df = pd.DataFrame([inputs], columns=feature_order)
     return submitted, input_df
 
 
@@ -104,16 +119,22 @@ st.set_page_config(page_title="Visit With Us Predictor", layout="centered")
 st.title("Visit With Us Tourism Predictor")
 st.write("Predict whether a customer will purchase the wellness tourism package.")
 
-model, metrics, params, model_repo_id = load_model_bundle()
+model, metrics, params, feature_schema, model_metadata, model_repo_id = load_model_bundle()
+feature_order = model_metadata.get("feature_columns") or list(feature_schema.keys())
 
 with st.expander("Model Details"):
     st.write(f"Model Hub Repo: `{model_repo_id}`")
-    if metrics:
+    if model_metadata:
+        # Show the compact metadata payload first because it includes metrics, feature order, and dataset lineage in one place.
+        st.json(model_metadata)
+    elif metrics or params:
+        st.write("Metrics")
         st.json(metrics)
-    if params:
+        st.write("Best Parameters")
         st.json(params)
 
-submitted, input_df = build_input_dataframe()
+submitted, input_df = build_input_dataframe(feature_schema, feature_order)
+st.session_state["latest_input_df"] = input_df.copy()
 
 if submitted:
     prediction = int(model.predict(input_df)[0])

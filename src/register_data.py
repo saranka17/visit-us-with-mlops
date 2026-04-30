@@ -9,6 +9,7 @@ from huggingface_hub.utils import RepositoryNotFoundError
 
 
 def main():
+    # Resolve all project-relative paths from the script location so the code
     project_root = Path(__file__).resolve().parents[1]
     data_path = project_root / "data" / "tourism.csv"
     load_dotenv(project_root / ".env")
@@ -28,7 +29,7 @@ def main():
         print(f"Local raw data available at: {data_path}")
         return
 
-    #initialize api client
+    # Use the Hub API directly instead of a git-based push so the same logic
     api = HfApi(token=hf_token)
 
     try:
@@ -46,6 +47,7 @@ def main():
             )
             print(f"Dataset repo '{dataset_repo_id}' created.")
 
+        # Keep the filename stable in the dataset repo so downstream steps know exactly where to download the raw dataset from.
         api.upload_file(
             path_or_fileobj=str(data_path),
             path_in_repo=data_path.name,

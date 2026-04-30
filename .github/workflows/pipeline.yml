@@ -96,6 +96,7 @@ jobs:
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
           MODEL_REPO_ID: ${{ vars.MODEL_REPO_ID }}
+          SKLEARN_N_JOBS: "-1"
         run: python src/train_model.py
 
       - name: Upload training artifacts
