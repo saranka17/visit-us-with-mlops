@@ -41,7 +41,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
-        run: python visit-with-us-mlops/src/register_data.py
+        run: python src/register_data.py
 
   data-preparation:
     name: Prepare Cleaned Dataset
@@ -61,14 +61,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r visit-with-us-mlops/requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Run data preparation
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
-        run: python visit-with-us-mlops/src/prepare_data.py
+        run: python src/prepare_data.py
 
   model-training:
     name: Train And Register Model
@@ -88,7 +88,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r visit-with-us-mlops/requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Run model training with MLflow tracking
         env:
@@ -96,15 +96,15 @@ jobs:
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           DATASET_REPO_ID: ${{ vars.DATASET_REPO_ID }}
           MODEL_REPO_ID: ${{ vars.MODEL_REPO_ID }}
-        run: python visit-with-us-mlops/src/train_model.py
+        run: python src/train_model.py
 
       - name: Upload training artifacts
         uses: actions/upload-artifact@v4
         with:
           name: model-training-artifacts
           path: |
-            visit-with-us-mlops/artifacts/random_forest_model
-            visit-with-us-mlops/mlruns
+            artifacts/random_forest_model
+            mlruns
           if-no-files-found: warn
 
   deploy-space:
@@ -125,18 +125,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r visit-with-us-mlops/requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Validate deployment files
         run: |
-          test -f visit-with-us-mlops/deployment/Dockerfile
-          test -f visit-with-us-mlops/deployment/app.py
-          test -f visit-with-us-mlops/deployment/requirements.txt
-          test -f visit-with-us-mlops/deployment/README.md
+          test -f deployment/Dockerfile
+          test -f deployment/app.py
+          test -f deployment/requirements.txt
+          test -f deployment/README.md
 
       - name: Push deployment files to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_USERNAME: ${{ vars.HF_USERNAME }}
           SPACE_REPO_ID: ${{ vars.SPACE_REPO_ID }}
-        run: python visit-with-us-mlops/src/deploy_space.py
+        run: python src/deploy_space.py
