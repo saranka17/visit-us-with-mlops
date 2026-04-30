@@ -259,22 +259,31 @@ jobs:
         run: |
           shopt -s nullglob
           patches=(repo-diffs/*.patch)
+          echo "Downloaded patch files: ${#patches[@]}"
           if [ ${#patches[@]} -eq 0 ]; then
             echo "No repository diff artifacts found."
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no_patch_artifacts" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          printf ' - %s\n' "${patches[@]}"
           for patch in "${patches[@]}"; do
+            echo "Applying patch: $patch"
+            git apply --stat "$patch" || true
             git apply --whitespace=nowarn "$patch"
           done
           git add -A
           git restore --staged artifacts mlruns data/processed || true
+          echo "Staged files after filtering runtime outputs:"
+          git diff --cached --name-status || true
           if git diff --cached --quiet; then
             echo "No tracked code changes to commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no_commitworthy_changes" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "reason=changes_staged" >> "$GITHUB_OUTPUT"
 
       - name: Commit workflow-managed updates
         id: commit_updates
@@ -282,6 +291,12 @@ jobs:
         run: |
           git commit -m "chore: sync workflow-managed code updates [skip ci]"
           echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Explain skipped code sync
+        if: steps.apply_diffs.outputs.changed != 'true'
+        run: |
+          echo "Code sync skipped."
+          echo "Reason: ${{ steps.apply_diffs.outputs.reason }}"
 
       - name: Sync with latest main
         if: steps.commit_updates.outputs.changed == 'true'
