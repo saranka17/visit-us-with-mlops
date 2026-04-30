@@ -55,16 +55,7 @@ def resolve_processed_file(
     hf_token: str | None,
     filename: str,
 ) -> Path:
-    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
     local_file = project_root / "data" / filename
-
-    if not dataset_repo_id:
-        if allow_local_fallback and local_file.exists():
-            print(f"Using local processed file: {local_file}")
-            return local_file
-        raise ValueError(
-            "DATASET_REPO_ID or HF_USERNAME must be set to load processed data from Hugging Face."
-        )
 
     try:
         downloaded_file = hf_hub_download(
@@ -103,9 +94,6 @@ def load_optional_json(
     hf_token: str | None,
     filename: str,
 ) -> dict:
-    allow_local_fallback = env_flag("ALLOW_LOCAL_FALLBACK", default=False)
-    local_file = project_root / "data" / filename
-
     if dataset_repo_id and hf_token:
         try:
             downloaded_file = hf_hub_download(
@@ -117,9 +105,6 @@ def load_optional_json(
             return json.loads(Path(downloaded_file).read_text())
         except Exception:
             pass
-
-    if allow_local_fallback and local_file.exists():
-        return json.loads(local_file.read_text())
 
     # Metadata files are helpful but not required for model training itself.
     return {}
